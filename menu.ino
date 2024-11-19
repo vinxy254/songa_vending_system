@@ -36,20 +36,48 @@
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
 #include <ssl_client.h>
+#include "cert.h"
 
 
 
-const char *ssid = "AQUAWELL"; // Enter your WiFi name
-const char *password = "92155435";  // Enter WiFi password
+const char *ssid = "vince"; // Enter your WiFi name
+const char *password = "123456789";  // Enter WiFi password
+String client_id = "vending_test";
 
-#define RED_LED     13
-#define YELLOW_LED  15
-#define GREEN_LED   2
+#define red_led     13
+#define yellow_led  2
+#define green_led   15
+#define relay_pin   12
+
+
+
+//firmware update declars
+#define LED_BUILTIN   2
+
+String FirmwareVer = {
+  "2.1"
+};
+#define URL_fw_Version "https://songatechnologies.co.ke/version.txt"
+#define URL_fw_Bin "https://songatechnologies.co.ke/OTA_firmware_update.bin"
+
+//#define URL_fw_Version "http://cade-make.000webhostapp.com/version.txt"
+//#define URL_fw_Bin "http://cade-make.000webhostapp.com/firmware.bin"
+
+void connect_wifi();
+void firmwareUpdate();
+int FirmwareVersionCheck();
+
+unsigned long previousMillis = 0; // will store last time LED was updated
+unsigned long previousMillis_2 = 0;
+const long interval = 60000;
+const long mini_interval = 1000;
+
+
 
 // MQTT Broker
-const char *mqtt_broker = "g82bea51.ala.us-east-1.emqxsl.com";// broker address
-const char *subscribe_topic = "aquawell_langata/valve_1"; // define topic
-const char *publish_topic = "langata_office/valve_1" ;
+const char *mqtt_broker = "s19165fb.ala.eu-central-1.emqxsl.com";// broker address
+const char *subscribe_topic = "adevice_no_1/receive"; // define topic
+const char *publish_topic = "device_no_1/send" ;
 const char *mqtt_username = "aquawell"; // username for authentication
 const char *mqtt_password = "1234";// password for authentication
 const int mqtt_port = 8883;// port of MQTT over TLS\SSL
@@ -199,6 +227,35 @@ LiquidMenu pay_menu(lcd, pay);
 LiquidSystem menu_system(start_menu, pay_menu);
 
 
+
+void repeatedCall() {
+  static int num=0;
+  unsigned long currentMillis = millis();
+  if ((currentMillis - previousMillis) >= interval) {
+    // save the last time you blinked the LED
+    previousMillis = currentMillis;
+    if (FirmwareVersionCheck()) {
+      firmwareUpdate();
+    }
+  }
+  if ((currentMillis - previousMillis_2) >= mini_interval) {
+    previousMillis_2 = currentMillis;
+    Serial.print("idle loop...");
+    Serial.print(num++);
+    Serial.print(" Active fw version:");
+    Serial.println(FirmwareVer);
+   if(WiFi.status() == WL_CONNECTED) 
+   {
+       Serial.println("wifi connected");
+   }
+   else
+   {
+    connect_wifi();
+   }
+  }
+}
+
+
 /*
  * This function will be attached to one or more LiquidLine
  * objects and will be called when the line is focused and
@@ -206,19 +263,105 @@ LiquidSystem menu_system(start_menu, pay_menu);
  * number - the number specified when attaching the function.
  * More on this in the function_menu.ino example.
 */
+void reconnect(){
+  if(client.connect(client_id.c_str(), mqtt_username, mqtt_password)){
+    digitalWrite(yellow_led, HIGH);
+  }
+}
+
+void firmwareUpdate(void) {
+  WiFiClientSecure client;
+  client.setCACert(rootCACertificate);
+  httpUpdate.setLedPin(LED_BUILTIN, LOW);
+  t_httpUpdate_return ret = httpUpdate.update(client, URL_fw_Bin);
+
+  switch (ret) {
+  case HTTP_UPDATE_FAILED:
+    Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+    break;
+
+  case HTTP_UPDATE_NO_UPDATES:
+    Serial.println("HTTP_UPDATE_NO_UPDATES");
+    break;
+
+  case HTTP_UPDATE_OK:
+    Serial.println("HTTP_UPDATE_OK");
+    break;
+  }
+}
+
+int FirmwareVersionCheck(void) {
+  String payload;
+  int httpCode;
+  String fwurl = "";
+  fwurl += URL_fw_Version;
+  fwurl += "?";
+  fwurl += String(rand());
+  Serial.println(fwurl);
+  WiFiClientSecure * client = new WiFiClientSecure;
+
+  if (client) 
+  {
+    client -> setCACert(rootCACertificate);
+
+    // Add a scoping block for HTTPClient https to make sure it is destroyed before WiFiClientSecure *client is 
+    HTTPClient https;
+
+    if (https.begin( * client, fwurl)) 
+    { // HTTPS      
+      Serial.print("[HTTPS] GET...\n");
+      // start connection and send HTTP header
+      delay(100);
+      httpCode = https.GET();
+      delay(100);
+      if (httpCode == HTTP_CODE_OK) // if version received
+      {
+        payload = https.getString(); // save received version
+      } else {
+        Serial.print("error in downloading version file:");
+        Serial.println(httpCode);
+      }
+      https.end();
+    }
+    delete client;
+  }
+      
+  if (httpCode == HTTP_CODE_OK) // if version received
+  {
+    payload.trim();
+    if (payload.equals(FirmwareVer)) {
+      Serial.printf("\nDevice already on latest firmware version:%s\n", FirmwareVer);
+      return 0;
+    } 
+    else 
+    {
+      Serial.println(payload);
+      Serial.println("New firmware detected");
+      return 1;
+    }
+  } 
+  return 0;  
+}
+
+
 void callback(char *topic, byte *payload, unsigned int length) {
   
   
 }
+
 void callback_function() {
   Serial.println(F("You called the callback function."));
 }
+
+
 void clr(int x){
 
     lcd.setCursor(0, x);
     lcd.print("                    ");
     vTaskDelay(20/portTICK_PERIOD_MS);
 }
+
+
 void goToPayMenu() {
   Serial.println("pay menu was called");
   menu_system.change_menu(pay_menu);
@@ -271,7 +414,9 @@ void go_to_cash_amount() {
     else if (key== 'D'){
       lcd.noBlink();
       go_to_vending(numberInput);
-     
+      //menu_system.change_menu(pay_menu);
+     //go restart this menu
+     go_to_cash_amount();
     }
 
   }
@@ -283,13 +428,33 @@ void go_to_vending(int amount){
     clr(1);
     clr(2);
     lcd.setCursor(0, 1);
-    lcd.print("vending screen");
+    lcd.print("dispensing...");
     lcd.setCursor(0, 2);
     lcd.print(amount);
     lcd.setCursor(15, 2);
     int ml = amount*16.66;
+    int on_time = (ml*30);
+    int then = millis();
+    digitalWrite(relay_pin, HIGH);
+    digitalWrite(green_led, HIGH);
     lcd.print(ml);
+    
   while(1){
+    Serial.println(millis());
+    int now = millis()-then;
+    char key = customKeypad.getKey();
+    int now_ml = ((now/1000)*33.33);
+    lcd.setCursor(5,3);
+    lcd.print(now_ml);
+    if (now >= on_time){
+      digitalWrite(relay_pin, LOW);
+      digitalWrite(green_led, LOW);
+      clr(3);
+      break;
+    }
+    if (key == '#'){
+      break;
+    }
     
     vTaskDelay(2/portTICK_PERIOD_MS);
   }
@@ -297,11 +462,11 @@ void go_to_vending(int amount){
 
 
 void setup() {
-  Serial.begin(9600);
 
-  pinMode(RED_LED, OUTPUT);
-  pinMode(YELLOW_LED, OUTPUT);
-  pinMode(GREEN_LED, OUTPUT);
+  pinMode(red_led, OUTPUT);
+  pinMode(yellow_led, OUTPUT);
+  pinMode(green_led, OUTPUT);
+  pinMode(relay_pin, OUTPUT);
   lcd.begin(20, 4);
   
   lcd.createChar(1, wifi_connected);
@@ -313,6 +478,12 @@ void setup() {
 
   lcd.setCursor(15, 0);
   lcd.write(3);
+  
+  Serial.begin(115200);
+  Serial.print("Active firmware version:");
+  Serial.println(FirmwareVer);
+  pinMode(LED_BUILTIN, OUTPUT);
+  connect_wifi();
 
   // Here we attach the function defined earlier to four LiquidLine objects.
   line21.attach_function(1, go_to_cash_amount);
@@ -320,20 +491,18 @@ void setup() {
   menu_system.set_focusPosition(Position::LEFT);
   menu_system.update();
 
-for(int x = 0; x<3; x++){
-  int y =9+x;
-  lcd.setCursor(y, 2);
-  lcd.print(".");
-  delay(1000);
-
-}
-digitalWrite(RED_LED, HIGH);
-delay(500);
-digitalWrite(YELLOW_LED, HIGH);
-delay(500);
-digitalWrite(GREEN_LED, HIGH);
-menu_system.change_menu(pay_menu);
+  for(int x = 0; x<3; x++){
+    int y =9+x;
+    lcd.setCursor(y, 2);
+    lcd.print(".");
+    delay(100);
   
+  }
+digitalWrite(red_led, HIGH);
+
+menu_system.change_menu(pay_menu);
+
+  WiFi.begin(ssid, password);
 //connecting to a mqtt broker
  espClient.setCACert(ca_cert);
  client.setServer(mqtt_broker, mqtt_port);
@@ -415,18 +584,19 @@ void connection_task(void *pvParameters){
   (void)pvParameters;
   while(1){
     if(!client.connected()){
-
+        digitalWrite(yellow_led, LOW);
+        
 
       if(WiFi.status() != WL_CONNECTED){
-
-
+        digitalWrite(yellow_led, LOW);
+        
       }
       else{
-
+        void reconnect();
       }
     }
-    else{
-
+    else if(client.connected()){
+      digitalWrite(yellow_led, HIGH);
     }
     vTaskDelay(100/portTICK_PERIOD_MS);
   }
