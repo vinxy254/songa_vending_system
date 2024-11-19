@@ -35,6 +35,8 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
 #include <ssl_client.h>
 #include "cert.h"
 
@@ -272,7 +274,7 @@ void reconnect(){
 void firmwareUpdate(void) {
   WiFiClientSecure client;
   client.setCACert(rootCACertificate);
-  httpUpdate.setLedPin(LED_BUILTIN, LOW);
+
   t_httpUpdate_return ret = httpUpdate.update(client, URL_fw_Bin);
 
   switch (ret) {
@@ -299,6 +301,12 @@ int FirmwareVersionCheck(void) {
   fwurl += String(rand());
   Serial.println(fwurl);
   WiFiClientSecure * client = new WiFiClientSecure;
+  
+  clr(1);
+  lcd.setCursor(0, 1);
+  lcd.print("check_update");
+
+  
 
   if (client) 
   {
@@ -482,8 +490,28 @@ void setup() {
   Serial.begin(115200);
   Serial.print("Active firmware version:");
   Serial.println(FirmwareVer);
-  pinMode(LED_BUILTIN, OUTPUT);
-  connect_wifi();
+
+  WiFi.begin(ssid, password);
+  if(WiFi.status() != WL_CONNECTED){
+    for(int i =0; 1<5; i++){
+      delay(1000);
+      lcd.setCursor(0,1);
+      lcd.print("connecting...");
+      if(WiFi.status() == WL_CONNECTED){
+        break;
+      }
+    }
+  }
+  if(WiFi.status() == WL_CONNECTED){
+      clr(1);
+      lcd.setCursor(0, 1);
+      lcd.print("checking update");
+      if (FirmwareVersionCheck()) {
+        clr(1);
+        lcd.print("updating");
+        firmwareUpdate();
+    }
+ }
 
   // Here we attach the function defined earlier to four LiquidLine objects.
   line21.attach_function(1, go_to_cash_amount);
@@ -502,7 +530,7 @@ digitalWrite(red_led, HIGH);
 
 menu_system.change_menu(pay_menu);
 
-  WiFi.begin(ssid, password);
+
 //connecting to a mqtt broker
  espClient.setCACert(ca_cert);
  client.setServer(mqtt_broker, mqtt_port);
